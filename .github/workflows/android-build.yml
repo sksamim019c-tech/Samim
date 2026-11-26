@@ -2,21 +2,20 @@ name: DARK MYRAA APK Build
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   android-build:
-    name: Build Android APK
+    name: Build DARK MYRAA Android APK
     runs-on: windows-latest
 
-    defaults:
-      run:
-        working-directory: myraa_exact
-
     steps:
-      - name: Checkout Source
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -35,27 +34,35 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK Components
+      - name: Install Android SDK
         shell: pwsh
         run: |
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Install Dependencies
-        run: npm ci
-
-      - name: Check Required Character Assets
+      - name: Check Project Files
         shell: pwsh
         run: |
-          if (!(Test-Path "assets/characters/evelyn")) {
-            throw "Missing assets/characters/evelyn. Restore the required licensed model files before building."
+          if (!(Test-Path "myraa_exact/package.json")) {
+            throw "Project folder or package.json is missing"
+          }
+          if (!(Test-Path "myraa_exact/scripts/build-android.ps1")) {
+            throw "Android build script is missing"
+          }
+          if (!(Test-Path "myraa_exact/assets/characters/evelyn")) {
+            throw "Required Evelyn model assets are missing"
           }
 
-      - name: Build DARK MYRAA APK
+      - name: Install Dependencies
+        working-directory: myraa_exact
+        run: npm ci
+
+      - name: Build Android APK
+        working-directory: myraa_exact
         shell: pwsh
         run: |
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1
 
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: DARK-MYRAA-ANDROID-APK
