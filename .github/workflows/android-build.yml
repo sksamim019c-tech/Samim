@@ -15,29 +15,10 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout Source
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Setup Java JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK
-        shell: pwsh
-        run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Find Project Folder
+      - name: Detect Project Folder
         shell: pwsh
         run: |
           if (Test-Path "myraa_exact/package.json") {
@@ -47,7 +28,41 @@ jobs:
             "PROJECT_DIR=." >> $env:GITHUB_ENV
           }
           else {
-            throw "package.json not found. Upload the complete project."
+            throw "Project package.json not found"
+          }
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+
+      - name: Verify Build Files
+        shell: pwsh
+        run: |
+          $p = "$env:GITHUB_WORKSPACE/$env:PROJECT_DIR"
+
+          if (!(Test-Path "$p/package-lock.json")) {
+            throw "package-lock.json missing"
+          }
+
+          if (!(Test-Path "$p/scripts/build-android.ps1")) {
+            throw "Android build script missing"
+          }
+
+          if (!(Test-Path "$p/assets/characters/evelyn")) {
+            throw "Required licensed Evelyn model files are missing"
           }
 
       - name: Install Dependencies
@@ -55,14 +70,40 @@ jobs:
         run: |
           Set-Location "$env:GITHUB_WORKSPACE/$env:PROJECT_DIR"
           npm ci
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) {
+            throw "Dependency installation failed"
+          }
 
-      - name: Build DARK MYRAA APK
+      - name: Build Android APK
         shell: pwsh
         run: |
           Set-Location "$env:GITHUB_WORKSPACE/$env:PROJECT_DIR"
+
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Android APK build failed"
+          }
+
+      - name: Verify APK
+        shell: pwsh
+        run: |
+          $apkPath = "$env:GITHUB_WORKSPACE/$env:PROJECT_DIR/artifacts/android"
+
+          if (!(Test-Path $apkPath)) {
+            throw "APK output folder missing"
+          }
+
+          $apk = Get-ChildItem $apkPath -Filter "*.apk"
+
+          if (!$apk) {
+            throw "APK file was not generated"
+          }
+
+          Write-Host "APK BUILD SUCCESSFUL"
+          $apk | ForEach-Object {
+            Write-Host $_.FullName
+          }
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
