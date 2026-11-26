@@ -18,46 +18,58 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Detect Project Folder
+      - name: Extract DARK MYRAA Source
         shell: pwsh
         run: |
-          $files = @(Get-ChildItem -Path . -Filter package.json -Recurse -File |
+          $zip = Join-Path $env:GITHUB_WORKSPACE "DARK-MYRAA-NYRA-STYLE-SOURCE.zip"
+
+          if (!(Test-Path $zip)) {
+            throw "Source ZIP not found in repository root"
+          }
+
+          $dest = Join-Path $env:GITHUB_WORKSPACE "source"
+          Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+
+          Write-Host "Source extracted successfully"
+
+      - name: Detect Android Project
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:GITHUB_WORKSPACE "source"
+
+          $files = @(Get-ChildItem $root -Filter package.json -Recurse -File |
             Where-Object {
               $_.FullName -notmatch '[\\/](node_modules|\.git)[\\/]'
             })
 
           if ($files.Count -eq 0) {
-            throw "No package.json found. Upload the actual Android project source first."
+            throw "No package.json found inside source ZIP"
           }
 
           $candidates = @($files | Where-Object {
-            Test-Path (Join-Path $_.DirectoryName "package-lock.json") -and
-            Test-Path (Join-Path $_.DirectoryName "scripts/build-android.ps1")
+            (Test-Path (Join-Path $_.DirectoryName "package-lock.json")) -and
+            (Test-Path (Join-Path $_.DirectoryName "scripts/build-android.ps1"))
           })
 
           if ($candidates.Count -ne 1) {
             $files | ForEach-Object { Write-Host $_.FullName }
-            throw "Could not uniquely identify Android project folder."
+            throw "Android project could not be identified uniquely"
           }
 
-          $projectDir = $candidates[0].DirectoryName
-          $relativeDir = [System.IO.Path]::GetRelativePath(
-            $env:GITHUB_WORKSPACE, $projectDir
+          $project = $candidates[0].DirectoryName
+          $relative = [System.IO.Path]::GetRelativePath(
+            $env:GITHUB_WORKSPACE, $project
           )
 
-          if ($relativeDir -eq ".") {
-            $relativeDir = ""
-          }
-
-          "PROJECT_DIR=$relativeDir" >> $env:GITHUB_ENV
-          Write-Host "Project folder: $relativeDir"
+          "PROJECT_DIR=$relative" >> $env:GITHUB_ENV
+          Write-Host "Detected project: $relative"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Setup Java JDK
+      - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -73,16 +85,17 @@ jobs:
         run: |
           $p = Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_DIR
 
-          if (!(Test-Path "$p/package-lock.json")) {
-            throw "package-lock.json missing"
-          }
+          $required = @(
+            "package.json",
+            "package-lock.json",
+            "scripts/build-android.ps1",
+            "assets/characters/evelyn"
+          )
 
-          if (!(Test-Path "$p/scripts/build-android.ps1")) {
-            throw "Android build script missing"
-          }
-
-          if (!(Test-Path "$p/assets/characters/evelyn")) {
-            throw "Required Evelyn model files missing"
+          foreach ($item in $required) {
+            if (!(Test-Path (Join-Path $p $item))) {
+              throw "Required project file missing: $item"
+            }
           }
 
       - name: Install Dependencies
@@ -90,9 +103,11 @@ jobs:
         run: |
           $p = Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_DIR
           Set-Location $p
+
           npm ci
+
           if ($LASTEXITCODE -ne 0) {
-            throw "Dependency installation failed"
+            throw "NPM dependency installation failed"
           }
 
       - name: Build Android APK
@@ -100,7 +115,9 @@ jobs:
         run: |
           $p = Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_DIR
           Set-Location $p
+
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1
+
           if ($LASTEXITCODE -ne 0) {
             throw "Android APK build failed"
           }
@@ -117,11 +134,13 @@ jobs:
           $apk = @(Get-ChildItem $apkPath -Filter "*.apk" -File)
 
           if ($apk.Count -eq 0) {
-            throw "APK file was not generated"
+            throw "APK was not generated"
           }
 
           Write-Host "APK BUILD SUCCESSFUL"
-          $apk | ForEach-Object { Write-Host $_.FullName }
+          $apk | ForEach-Object {
+            Write-Host $_.FullName
+          }
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
