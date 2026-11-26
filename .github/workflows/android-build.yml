@@ -21,15 +21,36 @@ jobs:
       - name: Detect Project Folder
         shell: pwsh
         run: |
-          if (Test-Path "myraa_exact/package.json") {
-            "PROJECT_DIR=myraa_exact" >> $env:GITHUB_ENV
+          $files = @(Get-ChildItem -Path . -Filter package.json -Recurse -File |
+            Where-Object {
+              $_.FullName -notmatch '[\\/](node_modules|\.git)[\\/]'
+            })
+
+          if ($files.Count -eq 0) {
+            throw "No package.json found. Upload the actual Android project source first."
           }
-          elseif (Test-Path "package.json") {
-            "PROJECT_DIR=." >> $env:GITHUB_ENV
+
+          $candidates = @($files | Where-Object {
+            Test-Path (Join-Path $_.DirectoryName "package-lock.json") -and
+            Test-Path (Join-Path $_.DirectoryName "scripts/build-android.ps1")
+          })
+
+          if ($candidates.Count -ne 1) {
+            $files | ForEach-Object { Write-Host $_.FullName }
+            throw "Could not uniquely identify Android project folder."
           }
-          else {
-            throw "Project package.json not found"
+
+          $projectDir = $candidates[0].DirectoryName
+          $relativeDir = [System.IO.Path]::GetRelativePath(
+            $env:GITHUB_WORKSPACE, $projectDir
+          )
+
+          if ($relativeDir -eq ".") {
+            $relativeDir = ""
           }
+
+          "PROJECT_DIR=$relativeDir" >> $env:GITHUB_ENV
+          Write-Host "Project folder: $relativeDir"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -46,12 +67,11 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: platform-tools platforms;android-35 build-tools;35.0.0
 
       - name: Verify Build Files
         shell: pwsh
         run: |
-          $p = "$env:GITHUB_WORKSPACE/$env:PROJECT_DIR"
+          $p = Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_DIR
 
           if (!(Test-Path "$p/package-lock.json")) {
             throw "package-lock.json missing"
@@ -62,13 +82,14 @@ jobs:
           }
 
           if (!(Test-Path "$p/assets/characters/evelyn")) {
-            throw "Required licensed Evelyn model files are missing"
+            throw "Required Evelyn model files missing"
           }
 
       - name: Install Dependencies
         shell: pwsh
         run: |
-          Set-Location "$env:GITHUB_WORKSPACE/$env:PROJECT_DIR"
+          $p = Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_DIR
+          Set-Location $p
           npm ci
           if ($LASTEXITCODE -ne 0) {
             throw "Dependency installation failed"
@@ -77,10 +98,9 @@ jobs:
       - name: Build Android APK
         shell: pwsh
         run: |
-          Set-Location "$env:GITHUB_WORKSPACE/$env:PROJECT_DIR"
-
+          $p = Join-Path $env:GITHUB_WORKSPACE $env:PROJECT_DIR
+          Set-Location $p
           pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-android.ps1
-
           if ($LASTEXITCODE -ne 0) {
             throw "Android APK build failed"
           }
@@ -88,22 +108,20 @@ jobs:
       - name: Verify APK
         shell: pwsh
         run: |
-          $apkPath = "$env:GITHUB_WORKSPACE/$env:PROJECT_DIR/artifacts/android"
+          $apkPath = Join-Path $env:GITHUB_WORKSPACE "$env:PROJECT_DIR/artifacts/android"
 
           if (!(Test-Path $apkPath)) {
             throw "APK output folder missing"
           }
 
-          $apk = Get-ChildItem $apkPath -Filter "*.apk"
+          $apk = @(Get-ChildItem $apkPath -Filter "*.apk" -File)
 
-          if (!$apk) {
+          if ($apk.Count -eq 0) {
             throw "APK file was not generated"
           }
 
           Write-Host "APK BUILD SUCCESSFUL"
-          $apk | ForEach-Object {
-            Write-Host $_.FullName
-          }
+          $apk | ForEach-Object { Write-Host $_.FullName }
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
